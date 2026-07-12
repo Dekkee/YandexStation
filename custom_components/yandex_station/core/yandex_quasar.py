@@ -626,6 +626,31 @@ class YandexQuasar(Dispatcher):
         resp = await r.json()
         return resp["alarms"]
 
+    async def get_notes(self) -> list[dict]:
+        """Облачные заметки/списки Алисы (rpc.alice, cookie-сессия, без CSRF).
+
+        Обходит стриминговую Алису: локальный glagol на «Что в списке покупок»
+        теперь отдаёт is_streaming без текстовой карточки (issue #631).
+        """
+        r = await self.session.post(
+            "https://rpc.alice.yandex.ru/gproxy/get_notes",
+            json={},
+            headers=NOTES_HEADERS,
+        )
+        resp = await r.json()
+        return resp.get("notes") or []
+
+    async def get_shopping_list(self) -> list[str]:
+        """Активные (не купленные) товары из облачного «Списка покупок»."""
+        for note in await self.get_notes():
+            if note.get("title") == SHOPPING_LIST_TITLE:
+                return [
+                    s["text"]
+                    for s in note.get("subtasks") or []
+                    if s.get("text") and not s.get("done")
+                ]
+        return []
+
     async def create_alarm(self, device: dict, alarm: dict) -> bool:
         alarm["device_id"] = device["quasar_info"]["device_id"]
         resp = await self.session.post(
@@ -666,6 +691,19 @@ ALARM_HEADERS = {
     "x-ya-app-type": "iot-app",
     "x-ya-application": '{"app_id":"unknown","uuid":"unknown","lang":"ru"}',
 }
+
+# Заголовки веб-клиента «Заметки и списки» (yandex.ru/alice/shopping-list).
+# Как ALARM_HEADERS, но x-ya-app-type "other" — cookie-only, без CSRF (rpc.alice.*).
+NOTES_HEADERS = {
+    "accept": "application/json",
+    "content-type": "application/json",
+    "origin": "https://yandex.ru",
+    "x-ya-app-type": "other",
+    "x-ya-application": '{"app_id":"unknown","uuid":"unknown","lang":"ru"}',
+}
+
+# Заголовок облачного «Списка покупок» — единственная заметка с этим title.
+SHOPPING_LIST_TITLE = "Список покупок"
 
 
 BOOL_CONFIG = {"да": True, "нет": False}

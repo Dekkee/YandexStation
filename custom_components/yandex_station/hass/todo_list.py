@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 
@@ -5,10 +6,17 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
 from ..core.yandex_glagol import YandexGlagol
+from ..core.yandex_quasar import YandexQuasar
 
 _LOGGER = logging.getLogger(__package__)
 
 RE_TODO = re.compile(r"^\d+\) (.+)$", re.MULTILINE)
+
+
+def alice_text(items: list[str]) -> str:
+    """Собрать нумерованный текст в формате карточки Алисы (под RE_TODO)."""
+    return "\n".join(f"{i + 1}) {name}" for i, name in enumerate(items))
+
 
 STORE_VERSION = 1
 STORE_KEY = "yandex_station.todo"
@@ -125,14 +133,15 @@ async def todo_save(hass: HomeAssistant, entity_id: str, alice_data: str) -> Non
 
 
 async def shopping_sync(
-    hass: HomeAssistant, glagol: YandexGlagol, entity_id: str
+    hass: HomeAssistant, quasar: YandexQuasar, glagol: YandexGlagol, entity_id: str
 ) -> None:
     try:
         # Элементы из списка Home Assistant
         items = await get_todo_items(hass, entity_id)
 
-        payload = {"command": "sendText", "text": "Что в списке покупок"}
-        card = await glagol.send(payload)
+        # Чтение списка Алисы — из облака (стриминговая Алиса не отдаёт текст
+        # локально, issue #631). Запись (добавь/удали) — по-прежнему через glagol.
+        card_text = alice_text(await quasar.get_shopping_list())
 
         store = Store(hass, STORE_VERSION, STORE_KEY)
         store_data = await store.async_load() or {}
@@ -140,31 +149,36 @@ async def shopping_sync(
         # Элементы ранее синхронизированные с алисой
         previous_alice_items = set(store_data.get(entity_id) or [])
 
-        # Удаляем выполненные
-        while for_remove := todo_for_remove(items, card["text"], previous_alice_items):
+        # Удаляем выполненные (guard: облако отражает изменение не мгновенно)
+        for _ in range(5):
+            for_remove = todo_for_remove(items, card_text, previous_alice_items)
+            if not for_remove:
+                break
             # Не удаляет больше 2-х элементов за раз
             await glagol.send(
                 {"command": "sendText", "text": "Удали " + ", ".join(for_remove[:2])}
             )
-            card = await glagol.send(payload)
+            await asyncio.sleep(1.0)
+            card_text = alice_text(await quasar.get_shopping_list())
 
         # Добавляем новые элементы в список по одному
-        if for_add := await todo_for_add(items, card["text"], previous_alice_items):
+        if for_add := await todo_for_add(items, card_text, previous_alice_items):
             for item in for_add:
                 await glagol.send(
                     {"command": "sendText", "text": f"Добавь в список покупок {item}"}
                 )
-            card = await glagol.send(payload)
+            await asyncio.sleep(1.0)
+            card_text = alice_text(await quasar.get_shopping_list())
 
         # Сохраняем изменения из Алисы в ToDo
-        await todo_save(hass, entity_id, card["text"])
+        await todo_save(hass, entity_id, card_text)
 
         # Обновляем Store
-        current_alice_items = set(RE_TODO.findall(card["text"]))
+        current_alice_items = set(RE_TODO.findall(card_text))
         store_data[entity_id] = current_alice_items
         await store.async_save(store_data)
 
-        # Остановим алису
+        # Остановим алису (на случай остаточного TTS от добавь/удали)
         await glagol.send({"command": "sendText", "text": "Стоп"})
 
     except Exception as e:

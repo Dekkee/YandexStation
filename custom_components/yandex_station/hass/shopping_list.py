@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 import uuid
@@ -6,6 +7,7 @@ from homeassistant.components.shopping_list import ShoppingData
 from homeassistant.core import HomeAssistant
 
 from ..core.yandex_glagol import YandexGlagol
+from ..core.yandex_quasar import YandexQuasar
 
 try:
     from homeassistant.const import EVENT_SHOPPING_LIST_UPDATED
@@ -66,7 +68,14 @@ def shopping_save(hass: HomeAssistant, shopping_data: ShoppingData, alice_data: 
             )
 
 
-async def shopping_sync(hass: HomeAssistant, glagol: YandexGlagol):
+def alice_text(items: list[str]) -> str:
+    """Собрать нумерованный текст в формате карточки Алисы (под RE_SHOPPING)."""
+    return "\n".join(f"{i + 1}) {name}" for i, name in enumerate(items))
+
+
+async def shopping_sync(
+    hass: HomeAssistant, quasar: YandexQuasar, glagol: YandexGlagol
+):
     entries = hass.config_entries.async_entries("shopping_list")
     if not entries:
         return
@@ -75,24 +84,30 @@ async def shopping_sync(hass: HomeAssistant, glagol: YandexGlagol):
         # magic for support new version after HA 2026.5 and old version
         data = getattr(entries[0], "runtime_data", hass.data.get("shopping_list"))
 
-        payload = {"command": "sendText", "text": "Что в списке покупок"}
-        card = await glagol.send(payload)
+        # Чтение списка — из облака (стриминговая Алиса не отдаёт текст локально).
+        # Запись (добавь/удали) по-прежнему через glagol: голосовые команды
+        # исполняются, ломается только чтение карточки-ответа.
+        card_text = alice_text(await quasar.get_shopping_list())
 
-        while for_remove := shopping_for_remove(data, card["text"]):
+        # guard: облако отражает glagol-удаление не мгновенно — не зацикливаемся
+        for _ in range(5):
+            for_remove = shopping_for_remove(data, card_text)
+            if not for_remove:
+                break
             # не удаляет больше 5 элементов за раз
             text = "Удали " + ", ".join(for_remove[:5])
             await glagol.send({"command": "sendText", "text": text})
-            # обновим после изменений
-            card = await glagol.send(payload)
+            await asyncio.sleep(1.0)  # дать облаку отразить изменение
+            card_text = alice_text(await quasar.get_shopping_list())
 
-        if for_add := shopping_for_add(data, card["text"]):
+        if for_add := shopping_for_add(data, card_text):
             for item in for_add:
                 # плохо работает, если добавлять всё сразу через запятую
                 text = f"Добавь в список покупок {item}"
                 await glagol.send({"command": "sendText", "text": text})
-            # обновим после изменений
-            card = await glagol.send(payload)
+            await asyncio.sleep(1.0)
+            card_text = alice_text(await quasar.get_shopping_list())
 
-        shopping_save(hass, data, card["text"])
+        shopping_save(hass, data, card_text)
     except Exception as e:
         _LOGGER.error("shopping_sync", exc_info=e)

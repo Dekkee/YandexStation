@@ -670,6 +670,30 @@ class YandexQuasar(Dispatcher):
             headers=NOTES_HEADERS,
         )
 
+    async def mark_bought(self, note_id: str, subtask_id: str, text: str) -> None:
+        """Пометить пункт «куплено» (done=true) — остаётся у Алисы зачёркнутым."""
+        await self.session.post(
+            "https://rpc.alice.yandex.ru/gproxy/update_subtask",
+            json={
+                "note_id": note_id,
+                "subtask": {"subtask_id": subtask_id, "text": text, "done": True},
+            },
+            headers=NOTES_HEADERS,
+        )
+
+    async def clear_bought_items(self) -> int:
+        """Смести все купленные (done) пункты из «Списка покупок». Вернуть их число."""
+        note = await self.get_shopping_note()
+        if note is None:
+            return 0
+        note_id = note["note_id"]
+        n = 0
+        for s in note.get("subtasks") or []:
+            if s.get("done") and s.get("subtask_id"):
+                await self.delete_shopping_item(note_id, s["subtask_id"])
+                n += 1
+        return n
+
     async def create_alarm(self, device: dict, alarm: dict) -> bool:
         alarm["device_id"] = device["quasar_info"]["device_id"]
         resp = await self.session.post(

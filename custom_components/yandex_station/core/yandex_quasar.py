@@ -640,16 +640,35 @@ class YandexQuasar(Dispatcher):
         resp = await r.json()
         return resp.get("notes") or []
 
-    async def get_shopping_list(self) -> list[str]:
-        """Активные (не купленные) товары из облачного «Списка покупок»."""
+    async def get_shopping_note(self) -> dict | None:
+        """Облачная заметка «Список покупок» целиком (note_id + subtasks) или None."""
         for note in await self.get_notes():
             if note.get("title") == SHOPPING_LIST_TITLE:
-                return [
-                    s["text"]
-                    for s in note.get("subtasks") or []
-                    if s.get("text") and not s.get("done")
-                ]
-        return []
+                return note
+        return None
+
+    @staticmethod
+    def note_active_items(note: dict) -> dict[str, str]:
+        """{текст: subtask_id} для активных (не купленных) пунктов заметки."""
+        return {
+            s["text"]: s["subtask_id"]
+            for s in note.get("subtasks") or []
+            if s.get("text") and not s.get("done") and s.get("subtask_id")
+        }
+
+    async def add_shopping_item(self, note_id: str, text: str) -> None:
+        await self.session.post(
+            "https://rpc.alice.yandex.ru/gproxy/create_subtask",
+            json={"note_id": note_id, "subtask": {"text": text}},
+            headers=NOTES_HEADERS,
+        )
+
+    async def delete_shopping_item(self, note_id: str, subtask_id: str) -> None:
+        await self.session.post(
+            "https://rpc.alice.yandex.ru/gproxy/delete_subtask",
+            json={"note_id": note_id, "subtask_id": subtask_id},
+            headers=NOTES_HEADERS,
+        )
 
     async def create_alarm(self, device: dict, alarm: dict) -> bool:
         alarm["device_id"] = device["quasar_info"]["device_id"]

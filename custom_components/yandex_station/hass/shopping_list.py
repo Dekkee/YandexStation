@@ -69,10 +69,11 @@ async def shopping_sync(hass: HomeAssistant, quasar: YandexQuasar):
         note_id = note["note_id"]
         alice = quasar.note_active_items(note)  # {текст: subtask_id}
 
-        # Выполненные в HA — удалить у Алисы
+        # Выполненные в HA — пометить «куплено» у Алисы (не удаляем; чистит
+        # отдельная команда clear_completed / quasar.clear_bought_items)
         for item in data.items:
             if item["complete"] and item["name"] in alice:
-                await quasar.delete_shopping_item(note_id, alice[item["name"]])
+                await quasar.mark_bought(note_id, alice[item["name"]], item["name"])
 
         # Новые в HA (не из Алисы) — добавить Алисе
         for item in data.items:

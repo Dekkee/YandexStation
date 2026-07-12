@@ -100,17 +100,17 @@ async def shopping_sync(
         previous_alice_items = set(store_data.get(entity_id) or [])
         current_todo = {item.get("summary") for item in items if item.get("summary")}
 
-        # Удаляем у Алисы: выполненные в ToDo + удалённые пользователем из ToDo
-        to_remove = set()
+        # Выполненные в ToDo → пометить «куплено» у Алисы (не удаляем; чистит
+        # отдельная команда clear_completed / quasar.clear_bought_items)
         for item in items:
             summary = item.get("summary")
             if summary and item.get("status") == "completed" and summary in alice:
-                to_remove.add(summary)
+                await quasar.mark_bought(note_id, alice[summary], summary)
+
+        # Удалённые пользователем из ToDo → удалить совсем у Алисы
         for summary in previous_alice_items - current_todo:
             if summary in alice:
-                to_remove.add(summary)
-        for summary in to_remove:
-            await quasar.delete_shopping_item(note_id, alice[summary])
+                await quasar.delete_shopping_item(note_id, alice[summary])
 
         # Добавляем Алисе новые активные элементы (которых нет у неё и которые
         # пользователь ранее не удалял из Алисы)

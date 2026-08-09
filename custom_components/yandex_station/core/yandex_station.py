@@ -922,14 +922,12 @@ class YandexStationBase(MediaBrowser, RestoreEntity):
                 payload = json.loads(media_id)
 
             elif media_type == "shopping_list":
-                # media_id: "update" — синк Shopping List; "clear_completed" — смести
-                # купленные у Алисы; иначе media_id = entity_id To-do списка
-                if media_id == "update":
-                    coro = shopping_list.shopping_sync(self.hass, self.quasar)
-                elif media_id == "clear_completed":
-                    coro = self.quasar.clear_bought_items()
-                else:
-                    coro = todo_list.shopping_sync(self.hass, self.quasar, media_id)
+                # media_id == "update" — легаси команда для интеграции Shopping List
+                coro = (
+                    shopping_list.shopping_sync(self.hass, self.quasar)
+                    if media_id == "update"
+                    else todo_list.shopping_sync(self.hass, self.quasar, media_id)
+                )
 
                 await self.hass.async_create_background_task(coro, self.name)
                 return
